@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(uv sync)",
+      "Bash(uv add:*)",
+      "Bash(uv lock:*)",
+      "Bash(uv run:*)",
+      "Bash(uv build)",
+      "Bash(uv pip:*)",
+      "Bash(python -m kuhaku_agent:*)",
+      "Bash(python -c:*)",
+      "Bash(pytest:*)",
+      "Bash(ruff:*)",
+      "Bash(git status)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git branch:*)",
+      "Bash(git restore:*)",
+      "Bash(git switch:*)",
+      "Bash(git stash:*)",
+      "Bash(grep:*)",
+      "Bash(rg:*)",
+      "Bash(find:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)"
+    ],
+    "ask": [
+      "Bash(git push:*)",
+      "Bash(git commit:*)",
+      "Bash(rm:*)",
+      "Bash(rmdir:*)"
+    ]
+  },
+  "env": {
+    "PYTHONUNBUFFERED": "1",
+    "PYTHONDONTWRITEBYTECODE": "1"
+  }
+}

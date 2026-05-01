@@ -1,0 +1,38 @@
+kuhaku-agent-cli
+Copyright 2026 kuhaku-agent-cli contributors
+
+This product includes software developed by the kuhaku-agent-cli project
+(https://github.com/<owner>/kuhaku-agent-cli).
+
+Licensed under the Apache License, Version 2.0 (the "License"). See the
+accompanying LICENSE file or http://www.apache.org/licenses/LICENSE-2.0
+for the full terms.
+
+------------------------------------------------------------------------
+Attribution requirement for forks and derivative works
+------------------------------------------------------------------------
+
+In addition to the standard Apache License 2.0 conditions (Section 4),
+any fork, derivative work, or redistribution — whether in source or
+binary form, modified or unmodified — MUST clearly state that it is
+derived from this project. The attribution must include both:
+
+  1. The project name: "kuhaku-agent-cli"
+  2. A link back to the upstream repository:
+     https://github.com/<owner>/kuhaku-agent-cli
+
+The attribution must appear in at least one of the following places,
+whichever is most visible to end users:
+
+  * The README (or equivalent top-level documentation) of the fork
+  * The NOTICE file of the fork (in addition to retaining this NOTICE)
+  * The "About" / "Credits" surface of any application built on top
+  * The package metadata (e.g. pyproject.toml `description` or homepage)
+
+Removing or obscuring this attribution requirement constitutes a
+violation of the License (Section 4(c)) and the additional terms set
+forth in this NOTICE file.
+
+This requirement applies in addition to, not in place of, the standard
+Apache 2.0 obligations to retain copyright notices, the LICENSE file,
+and the contents of this NOTICE file in all distributions.
