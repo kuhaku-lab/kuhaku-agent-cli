@@ -195,6 +195,31 @@ When the operator clicks, the bot sends a `user.tool_confirmation` event via the
 
 If the approval UI gets in the way during development, switch the policy to `always_allow` in the spec. Full reference: `.claude/skills/kuhaku-agent-dev/references/approval-flow.md`.
 
+## Image attachments
+
+Attach an image (PNG / JPEG / GIF / WebP) to your Slack mention and the bot forwards it to the Agent alongside your text — useful for receipt OCR, screenshot explanations, diagram reading, etc.
+
+### Required Slack scope
+
+Add **`files:read`** to the Bot Token Scopes. Without it, `url_private` returns an HTML auth-error page and Anthropic responds with `Could not process image`.
+
+1. https://api.slack.com/apps → your app → **OAuth & Permissions**
+2. Add **`files:read`** to Bot Token Scopes
+3. **Reinstall to Workspace** and update `SLACK_BOT_TOKEN` in `.env` with the new `xoxb-...`
+
+### Required on the Anthropic side
+
+- The Agent's `model.id` must support vision (Sonnet 4.x / Opus 4.x series)
+- Sonnet 3 and earlier do not accept image content blocks
+
+### Limits
+
+- **20 MiB** per file (oversized attachments are dropped with a surface-level warning)
+- Base64 inline encoding — large or numerous images bloat the request
+- Magic-byte sniffing rejects non-image bytes (catches the missing-scope case automatically)
+
+Full reference: `.claude/skills/kuhaku-agent-dev/references/image-attachments.md`.
+
 ## CLI commands
 
 ```

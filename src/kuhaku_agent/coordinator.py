@@ -29,7 +29,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import Callable, Literal, Optional
 
-from .backend import Backend
+from .backend import Backend, StaleSessionError
 from .events import Done, Hiccup, RequiresAction, Say, Stage, Tool
 from .surfaces.base import Inbound, Reply, Step, Surface, ToolDecision
 from .thread_store import ThreadStore
@@ -179,7 +179,20 @@ class Coordinator:
             session_id = self._resolve(key, inbound)
             reply = self._open(inbound)
             state = _RunState()
-            outcome = self._stream(session_id, key, inbound, reply, state)
+            try:
+                outcome = self._stream(session_id, key, inbound, reply, state)
+            except StaleSessionError as exc:
+                # Cached session was archived/deleted server-side. Drop the
+                # mapping, open a fresh session, and retry once with a clean
+                # _RunState so leftover Tool beats don't bleed across.
+                log.warning(
+                    "stale session %s; opening new session for thread=%s",
+                    exc.session_id, key,
+                )
+                self.threads.forget(key)
+                session_id = self._resolve(key, inbound)
+                state = _RunState()
+                outcome = self._stream(session_id, key, inbound, reply, state)
             if outcome == "paused":
                 paused = True
                 return
@@ -265,8 +278,16 @@ class Coordinator:
         reply: Reply,
         state: _RunState,
     ) -> _PumpOutcome:
-        log.info("stream: session=%s text=%r", session_id, inbound.text[:80])
-        with self.backend.converse(session_id, inbound.text or "（空メンション）") as frames:
+        log.info(
+            "stream: session=%s text=%r images=%d",
+            session_id,
+            inbound.text[:80],
+            len(inbound.attachments),
+        )
+        images = [(a.mime, a.data) for a in inbound.attachments]
+        with self.backend.converse(
+            session_id, inbound.text or "（空メンション）", images=images
+        ) as frames:
             return self._pump(frames, session_id, key, inbound, reply, state)
 
     def _pump(

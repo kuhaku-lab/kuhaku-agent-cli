@@ -62,10 +62,10 @@ src/kuhaku_agent/
 ├── runner.py           # build_runtime + serve()
 ├── cli.py              # typer commands: serve / vaults / doctor
 └── surfaces/
-    ├── base.py         # Surface ABC, Inbound, Reply (Protocol), Step, Listener
+    ├── base.py         # Surface ABC, Inbound, Reply, Step, Listener, Attachment, ToolDecision
     └── slack/
-        ├── surface.py     # SlackSurface (Bolt Socket Mode)
-        ├── streamer.py    # SlackReply (single-worker queue)
+        ├── surface.py     # SlackSurface (Bolt Socket Mode + Block Kit approval + image download)
+        ├── streamer.py    # SlackReply (single-worker queue + heartbeat)
         └── diagnostics.py # Hiccup → Slack mrkdwn
 ```
 
@@ -78,6 +78,7 @@ For each of these the detailed recipe lives under `references/`. Read the matchi
 - **Reproducing a streaming bug** or **changing event parsing** → `references/architecture.md`
 - **Implementing or extending `kuhaku-agent init`** → `references/init-command.md`
 - **Tool approval flow (`always_ask` / `requires_action` / `user.tool_confirmation`)** → `references/approval-flow.md`
+- **Image attachments (Slack file → Anthropic image block)** → `references/image-attachments.md`
 - **Releasing / running the bot in development** → `scripts/doctor.sh`
 
 ## Style guardrails
@@ -98,6 +99,7 @@ These exist because the behaviour is non-obvious from the code alone:
 3. **`Reply.seal` must be called exactly once per `open_reply`.** The Slack worker shuts down on seal; calling write/seal afterwards is a no-op but a sign of a logic error upstream.
 4. **Do not seal on `RequiresAction`.** When `session.status_idle` arrives with `stop_reason.type == "requires_action"`, the agent is paused awaiting human approval — not finished. The `Reply` must stay live until every `tool_use_id` is resolved via `user.tool_confirmation` and the resumed run reaches `end_turn`. See `references/approval-flow.md`.
 5. **Vault credential URL must match the Agent's `mcp_servers[].url` byte-for-byte.** Trailing slash, scheme, and subdomain count. Mismatch surfaces as `mcp_authentication_failed_error: no credential is stored for this server URL` — see `references/troubleshooting.md`.
+6. **Slack image attachments require the `files:read` scope.** Without it, `url_private` returns an HTML auth page that we forward as base64 to Anthropic, which then 400s with `Could not process image`. The `_sniff_image_mime` magic-byte check catches this and logs a clear ERROR — but the only fix is adding the scope and reinstalling. See `references/image-attachments.md`.
 
 ## Tests
 

@@ -14,13 +14,26 @@ Naming choices intentionally diverge from agentchannels' TypeScript types:
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, Literal, Optional, Protocol
 
 
 # ---------------------------------------------------------------------------
 # Inbound message
 # ---------------------------------------------------------------------------
+
+
+@dataclass(slots=True)
+class Attachment:
+    """An image attached to an inbound message.
+
+    The Surface downloads bytes (e.g. Slack's ``url_private`` requires auth
+    headers); by the time it lands on ``Inbound`` it's raw bytes ready to be
+    base64-encoded into an Anthropic Managed Agents image block.
+    """
+
+    mime: str
+    data: bytes
 
 
 @dataclass(slots=True)
@@ -43,6 +56,9 @@ class Inbound:
         ``True`` when this message explicitly @-mentioned the bot.
     is_dm:
         ``True`` for direct messages.
+    attachments:
+        Files the user attached alongside the message — currently images.
+        The Surface downloads bytes before putting them here.
     raw:
         Original platform event for debug or advanced lookups.
     """
@@ -54,6 +70,7 @@ class Inbound:
     text: str
     is_mention: bool = False
     is_dm: bool = False
+    attachments: list[Attachment] = field(default_factory=list)
     raw: Any = None
 
     def thread_key(self, surface_name: str) -> str:

@@ -6,14 +6,28 @@ the operator can pick one, and surfacing failures as plain Python exceptions.
 """
 from __future__ import annotations
 
+import base64
 import logging
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Iterator, Optional
+from typing import Iterator, Optional, Sequence
 
 import anthropic
 
 from .events import ParsedFrame, parse_event
+
+
+class StaleSessionError(RuntimeError):
+    """The cached session_id no longer accepts events (archived / deleted).
+
+    Raised by ``converse`` so the Coordinator can drop the ``ThreadStore``
+    entry and retry with a fresh session for the same thread.
+    """
+
+    def __init__(self, session_id: str, original: Exception) -> None:
+        self.session_id = session_id
+        self.original = original
+        super().__init__(f"session {session_id} is archived/gone: {original}")
 
 log = logging.getLogger(__name__)
 
@@ -129,7 +143,12 @@ class Backend:
         }
         if result == "deny" and deny_message:
             payload["deny_message"] = deny_message
-        self._client.beta.sessions.events.send(session_id, events=[payload])
+        try:
+            self._client.beta.sessions.events.send(session_id, events=[payload])
+        except anthropic.BadRequestError as exc:
+            if _is_stale_session_error(exc):
+                raise StaleSessionError(session_id, exc) from exc
+            raise
 
     @contextmanager
     def converse_resume(self, session_id: str) -> Iterator[Iterator[ParsedFrame]]:
@@ -140,7 +159,12 @@ class Backend:
         ``converse``, no ``user.message`` is sent — we are reading the tail of
         the previous turn, not starting a new one.
         """
-        stream_ctx = self._client.beta.sessions.events.stream(session_id)
+        try:
+            stream_ctx = self._client.beta.sessions.events.stream(session_id)
+        except anthropic.BadRequestError as exc:
+            if _is_stale_session_error(exc):
+                raise StaleSessionError(session_id, exc) from exc
+            raise
         stream = stream_ctx.__enter__()
         try:
             def _frames() -> Iterator[ParsedFrame]:
@@ -155,7 +179,13 @@ class Backend:
             stream_ctx.__exit__(None, None, None)
 
     @contextmanager
-    def converse(self, session_id: str, user_text: str) -> Iterator[Iterator[ParsedFrame]]:
+    def converse(
+        self,
+        session_id: str,
+        user_text: str,
+        *,
+        images: Sequence[tuple[str, bytes]] = (),
+    ) -> Iterator[Iterator[ParsedFrame]]:
         """Send the user message and yield an iterator of parsed frames.
 
         Usage::
@@ -165,22 +195,38 @@ class Backend:
                     for beat in frame.beats:
                         ...
 
+        ``images`` is an optional sequence of ``(mime_type, bytes)`` tuples;
+        each one is base64-encoded and appended to the ``user.message`` as an
+        image block, so the agent can see attachments alongside the prompt.
+
         Wrapping the SDK's two-step protocol (``stream`` opened → ``send``)
         in a context manager keeps callers from forgetting to close the
         underlying SSE connection.
         """
+        content: list[dict] = [{"type": "text", "text": user_text}]
+        for mime, data in images:
+            content.append(
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": mime,
+                        "data": base64.standard_b64encode(data).decode("ascii"),
+                    },
+                }
+            )
         stream_ctx = self._client.beta.sessions.events.stream(session_id)
         stream = stream_ctx.__enter__()
         try:
-            self._client.beta.sessions.events.send(
-                session_id,
-                events=[
-                    {
-                        "type": "user.message",
-                        "content": [{"type": "text", "text": user_text}],
-                    }
-                ],
-            )
+            try:
+                self._client.beta.sessions.events.send(
+                    session_id,
+                    events=[{"type": "user.message", "content": content}],
+                )
+            except anthropic.BadRequestError as exc:
+                if _is_stale_session_error(exc):
+                    raise StaleSessionError(session_id, exc) from exc
+                raise
 
             def _frames() -> Iterator[ParsedFrame]:
                 for raw in stream:
@@ -248,3 +294,27 @@ class Backend:
         del session_id  # SDK download is keyed only by file_id
         resp = self._client.beta.files.download(file_id)
         return resp.read()
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+_STALE_SESSION_MARKERS = (
+    "archived session",
+    "session not found",
+    "deleted session",
+    "no such session",
+)
+
+
+def _is_stale_session_error(exc: anthropic.BadRequestError) -> bool:
+    """Decide whether a 400 from Anthropic means the cached session is gone.
+
+    The error message text is the only signal Anthropic exposes today, so we
+    match on a short list of known phrasings. Update if Anthropic changes
+    the wording.
+    """
+    msg = str(exc).lower()
+    return any(marker in msg for marker in _STALE_SESSION_MARKERS)

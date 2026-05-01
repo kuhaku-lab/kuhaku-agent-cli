@@ -12,7 +12,10 @@ from typing import Optional
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
+import requests
+
 from ..base import (
+    Attachment,
     Inbound,
     Listener,
     Reply,
@@ -21,6 +24,27 @@ from ..base import (
     ToolDecisionListener,
 )
 from .streamer import SlackReply
+
+
+_MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+"""Cap per-image download size; Anthropic's image input limits are around
+this bracket and oversized files just bloat the request anyway."""
+
+
+def _sniff_image_mime(data: bytes) -> Optional[str]:
+    """Return the canonical image MIME from magic bytes, or ``None`` if the
+    payload is not one of Anthropic's supported formats. Used to catch
+    Slack returning HTML-instead-of-image (the typical failure mode when
+    the bot lacks the ``files:read`` scope)."""
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith(b"GIF87a") or data.startswith(b"GIF89a"):
+        return "image/gif"
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return None
 
 
 TOOL_CONFIRM_ACTION_PREFIX = "kuhaku.tool_confirm"
@@ -298,6 +322,8 @@ class SlackSurface(Surface):
         raw_text: str = event.get("text", "")
         cleaned = self._strip_mention(raw_text)
 
+        attachments = self._fetch_image_attachments(event.get("files") or [])
+
         inbound = Inbound(
             message_id=event["ts"],
             where=event["channel"],
@@ -306,6 +332,7 @@ class SlackSurface(Surface):
             text=cleaned,
             is_mention=True,
             is_dm=event.get("channel_type") == "im",
+            attachments=attachments,
             raw=event,
         )
         for listener in list(self._listeners):
@@ -318,3 +345,71 @@ class SlackSurface(Surface):
         if not self._mention_pattern:
             return text.strip()
         return self._mention_pattern.sub("", text).strip()
+
+    def _fetch_image_attachments(self, files: list[dict]) -> list[Attachment]:
+        """Download image files from Slack and return them as ``Attachment``s.
+
+        Slack's ``url_private`` / ``url_private_download`` URLs require a
+        Bearer token; without ``files:read`` scope the API returns an HTML
+        login page instead of the image. We sniff magic bytes after download
+        to catch that case before forwarding garbage to Anthropic (which
+        responds with the unhelpful "Could not process image").
+        """
+        out: list[Attachment] = []
+        for f in files:
+            mime = (f.get("mimetype") or "").lower()
+            # Prefer the dedicated download URL — some workspaces serve an
+            # HTML viewer page from `url_private` instead of binary content.
+            url = f.get("url_private_download") or f.get("url_private")
+            name = f.get("name") or f.get("title") or ""
+            if not mime.startswith("image/") or not url:
+                log.debug("skipping non-image attachment: name=%r mime=%r", name, mime)
+                continue
+            size = f.get("size")
+            if isinstance(size, int) and size > _MAX_ATTACHMENT_BYTES:
+                log.warning(
+                    "skipping oversized attachment %r (%d bytes > %d cap)",
+                    name, size, _MAX_ATTACHMENT_BYTES,
+                )
+                continue
+            try:
+                resp = requests.get(
+                    url,
+                    headers={"Authorization": f"Bearer {self._config.bot_token}"},
+                    timeout=15,
+                    allow_redirects=True,
+                )
+                resp.raise_for_status()
+            except Exception:  # noqa: BLE001
+                log.exception("failed to download Slack file %r", name)
+                continue
+            data = resp.content
+            if len(data) > _MAX_ATTACHMENT_BYTES:
+                log.warning(
+                    "downloaded attachment %r exceeded cap (%d > %d), skipping",
+                    name, len(data), _MAX_ATTACHMENT_BYTES,
+                )
+                continue
+            sniffed = _sniff_image_mime(data)
+            if sniffed is None:
+                # Not a recognized image — almost always Slack returning an
+                # auth-error HTML page. Surface a clear log line so the
+                # operator can grant `files:read` instead of debugging
+                # "Could not process image" from the agent.
+                log.error(
+                    "Slack returned non-image bytes for %r (Content-Type=%r, "
+                    "first 16 bytes=%s). Likely missing `files:read` scope or "
+                    "the bot is not in the channel where the file lives.",
+                    name,
+                    resp.headers.get("Content-Type"),
+                    data[:16].hex(),
+                )
+                continue
+            if sniffed != mime:
+                log.info(
+                    "attachment %r: declared mime=%s but sniffed=%s (using sniffed)",
+                    name, mime, sniffed,
+                )
+            out.append(Attachment(mime=sniffed, data=data))
+            log.info("attached image %r (%s, %d bytes)", name, sniffed, len(data))
+        return out

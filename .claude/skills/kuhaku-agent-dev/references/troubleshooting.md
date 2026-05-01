@@ -55,6 +55,40 @@ If the bridge "feels" stuck but the Console says `running`, it's not this — in
 3. Make them identical. Either edit `agents/<name>.json` and re-run `kuhaku-agent init agent --from-file ...`, or recreate the credential in Console with the URL the Agent expects.
 4. `uv run kuhaku-agent vaults` to confirm the credential lists under the right vault id and status is `active`.
 
+## `unknown_error: Could not process image`
+
+**Symptom:** Slack reply is `:x: エージェントエラー [unknown_error]: Could not process image` shortly after a user mentions the bot with an image attached.
+
+**Cause:** The bytes the bot forwarded to Anthropic aren't a real image. Almost always one of:
+
+1. **Missing `files:read` Slack scope.** `url_private` / `url_private_download` returns an HTML auth page; we forward that as base64 → Anthropic 400s.
+2. **Agent model lacks vision.** Sonnet 3 and earlier don't accept image blocks; Sonnet 4.x and Opus 4.x do.
+3. **Image too large** (`>20 MiB`) — already capped client-side, but if you raise the cap Anthropic still has its own.
+
+**Fix:**
+
+1. Check the surface log first. If you see `[ERROR] Slack returned non-image bytes for ... (Content-Type='text/html', first 16 bytes=...)` — that's case 1. Add `files:read` to **OAuth & Permissions → Bot Token Scopes**, **Reinstall to Workspace**, update `SLACK_BOT_TOKEN` in `.env`, restart `serve`.
+2. If you see `[INFO] attached image '...' (image/png, ... bytes)` and the error still appears — that's case 2. Check `agents/<name>.json` `model.id` and switch to a vision-capable model.
+3. If neither, dump the first 32 bytes of the downloaded file (extend `_sniff_image_mime` to log on success once for diagnostics) — corrupt or unsupported encoding.
+
+Full reference: `references/image-attachments.md`.
+
+## `Cannot send events to archived session: sesn_...`
+
+**Cause:** The session id cached in `.kuhaku/threads.json` was archived server-side (idle timeout, manual delete, retention policy). The Coordinator already handles this: `Backend.converse` raises `StaleSessionError`, the cached mapping is dropped, a fresh session is opened, and the same `Reply` is reused.
+
+If you see the error in logs but the user reply still rendered correctly, that's the auto-recovery doing its job — no action needed.
+
+If you see the error AND a user-visible `:fire: 予期しないエラー` reply, the retry path itself failed. Check the second `_stream` call — likely a non-stale-session error that wasn't retried.
+
+To proactively reset history (e.g. before a demo), delete the file:
+
+```bash
+rm .kuhaku/threads.json
+```
+
+Next mention starts a fresh session per thread.
+
 ## `chat.startStream` always falls back to `chat.update`
 
 **Cause:** The Slack workspace doesn't have the assistant streaming feature enabled, or the bot's scopes don't include it.
